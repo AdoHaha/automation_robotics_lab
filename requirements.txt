@@ -1,0 +1,3 @@
+pulp
+pandas
+matplotlib
