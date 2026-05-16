@@ -36,15 +36,15 @@ The laboratory sessions cover a range of topics from basic linear programming to
 - Modeling logical constraints
 - Solving scheduling problems
 
-### Lab 4: Dynamic Programming - Implementation in Python
+### Lab 4: Production Scheduling - Job-Shop Optimization
 
 <a target="_blank" href="https://colab.research.google.com/github/AdoHaha/automation_robotics_lab/blob/master/lab_auto_4.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
-- Understanding dynamic programming concepts
-- Implementing simple DP tasks
-- Result interpretation in production context
+- Understanding job-shop scheduling in a robot-cell context
+- Building a PuLP mixed-integer model with start times and no-overlap constraints
+- Validating and interpreting schedules with Gantt charts
 
 ### Lab 5: Network Methods - CPM/PERT in Python
 
