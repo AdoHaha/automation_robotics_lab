@@ -1,3 +1,5 @@
 pulp
+numpy
 pandas
 matplotlib
+networkx

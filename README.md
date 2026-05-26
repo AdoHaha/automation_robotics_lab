@@ -52,9 +52,9 @@ The laboratory sessions cover a range of topics from basic linear programming to
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
-- Learning critical path method
-- Implementing algorithms for time calculations
-- Getting familiar with PERT method
+- Planning a robotics demo project with CPM, PERT, and Gantt charts
+- Interpreting slack, critical paths, supplier choices, and crashing decisions
+- Estimating deadline risk with PERT and Monte Carlo simulation
 
 ### Lab 6: Machine learning and statistics in optimization of automation tasks
 
