@@ -308,6 +308,15 @@ This lab reuses:
         ),
         md(
             r"""
+## System overview
+
+![Smart robotic production cell with forecasting, ML risk, network planning, and scheduling overlays](https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6/lab_auto_6_illustration.png)
+
+The illustration shows the whole capstone idea: a robot production cell connected to forecasting, machine-risk monitoring, network planning, and schedule optimization.
+"""
+        ),
+        md(
+            r"""
 ## Learning goals
 
 After this lab you should be able to:

@@ -13,6 +13,7 @@ DATA_DIR = ROOT / "data"
 
 REQUIRED_TITLES = [
     "# Lab 6: Forecast-Driven Operation of a Smart Robotic Production Cell",
+    "## System overview",
     "## 0. Imports and configuration",
     "## 1. Starter business data",
     "## 2. Ingredient-price data from the internet",
@@ -71,6 +72,9 @@ def main() -> None:
     for function in REQUIRED_FUNCTIONS:
         if function not in all_source:
             fail(f"Missing required helper: {function}")
+
+    if "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6/lab_auto_6_illustration.png" not in all_source:
+        fail("Missing GitHub raw illustration link.")
 
     if all_source.count("TODO") < 8:
         fail("Expected at least 8 TODO markers for student work.")
