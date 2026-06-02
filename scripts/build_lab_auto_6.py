@@ -486,14 +486,18 @@ Answer before modeling:
             r"""
 ## 2. Ingredient-price data from the internet
 
-The live data source is FRED. The suggested series are:
+The live data source is [FRED](https://fred.stlouisfed.org/), the Federal Reserve Economic Data portal.
 
-| Ingredient | FRED series | Original unit |
-|---|---:|---|
-| beef | `APU0000703112` | USD/lb |
-| eggs | `APU0000708111` | USD/dozen |
-| milk | `APU0000709112` | USD/gallon |
-| chicken | `APU0000FF1101` | USD/lb |
+Start from the [FRED commodities category](https://fred.stlouisfed.org/categories/32217) or use the FRED search bar. As one worked example, [chicken breast, boneless, per lb](https://fred.stlouisfed.org/series/APU0000FF1101) has series ID `APU0000FF1101`.
+
+Your job is to find and verify comparable monthly price series for beef, eggs, and milk. The code cell below includes a starter mapping so the notebook can run, but you should still check the pages and units.
+
+| Ingredient | Student action | Original unit to verify |
+|---|---|---|
+| chicken | worked example: `APU0000FF1101` | USD/lb |
+| beef | find/verify a ground beef series | USD/lb |
+| eggs | find/verify an eggs series | USD/dozen |
+| milk | find/verify a whole milk series | USD/gallon |
 
 The notebook also includes `data/lab6_price_fallback.csv`, so the exercise still works offline.
 
@@ -503,6 +507,8 @@ New idea: a public time series rarely has exactly the unit we need. FRED may rep
         code(
             r"""
 # FRED IDs are stable identifiers for public monthly price series.
+# The chicken ID is given as a worked example. Verify or replace the other IDs
+# after searching FRED yourself.
 fred_series = {
     "beef": "APU0000703112",
     "eggs": "APU0000708111",
