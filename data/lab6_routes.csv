@@ -1,0 +1,8 @@
+product,operation,station,base_duration_min
+Protein Plus,1,Mixer,35
+Protein Plus,2,Thermal processor,50
+Protein Plus,3,Packaging robot,30
+Protein Plus,4,Vision inspection,15
+Budget Blend,1,Mixer,30
+Budget Blend,2,Packaging robot,28
+Budget Blend,3,Vision inspection,12

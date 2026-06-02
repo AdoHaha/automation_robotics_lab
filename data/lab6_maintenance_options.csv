@@ -1,0 +1,5 @@
+machine_id,station,service_time_min,service_cost,failure_cost,risk_reduction
+1,Mixer,45,450,4000,0.7
+2,Thermal processor,60,700,7000,0.75
+3,Packaging robot,50,600,5500,0.7
+4,Vision inspection,35,350,3000,0.65
