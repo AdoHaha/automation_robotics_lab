@@ -73,7 +73,7 @@ def main() -> None:
         if function not in all_source:
             fail(f"Missing required helper: {function}")
 
-    if "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6/lab_auto_6_illustration.png" not in all_source:
+    if "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/master/lab_auto_6_illustration.png" not in all_source:
         fail("Missing GitHub raw illustration link.")
 
     if all_source.count("TODO") < 8:

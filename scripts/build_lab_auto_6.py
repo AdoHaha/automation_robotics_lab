@@ -310,7 +310,7 @@ This lab reuses:
             r"""
 ## System overview
 
-![Smart robotic production cell with forecasting, ML risk, network planning, and scheduling overlays](https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6/lab_auto_6_illustration.png)
+![Smart robotic production cell with forecasting, ML risk, network planning, and scheduling overlays](https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/master/lab_auto_6_illustration.png)
 
 The illustration shows the whole capstone idea: a robot production cell connected to forecasting, machine-risk monitoring, network planning, and schedule optimization.
 """
@@ -396,7 +396,6 @@ MAINTENANCE_BUDGET = 1200
 # automatically copied into /content. This helper downloads the required data
 # files when they are missing. If you clone the repository first, it does nothing.
 GITHUB_RAW_BASES = [
-    "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6",
     "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/master",
 ]
 
@@ -771,6 +770,37 @@ Vocabulary:
 - **probability threshold**: the cutoff where we convert a probability into an action.
 """
         ),
+        md(
+            r"""
+### ML warm-up: read a confusion matrix
+
+Before training a model, read this small example. Rows are actual outcomes; columns are model predictions.
+
+- A **false negative** is dangerous here: the model predicts "not near failure", but the machine is actually near failure.
+- A **false positive** is annoying but less severe: the model asks for maintenance that was not needed.
+
+This is why a maintenance model should not be judged by accuracy alone.
+"""
+        ),
+        code(
+            r"""
+toy_confusion = pd.DataFrame(
+    [[920, 40], [18, 22]],
+    index=["actual not near failure", "actual near failure"],
+    columns=["predicted not near failure", "predicted near failure"],
+)
+
+toy_false_negative_cost = 5000
+toy_false_positive_cost = 600
+toy_expected_cost = (
+    toy_confusion.loc["actual near failure", "predicted not near failure"] * toy_false_negative_cost
+    + toy_confusion.loc["actual not near failure", "predicted near failure"] * toy_false_positive_cost
+)
+
+display(toy_confusion)
+print(f"Expected error cost in this toy example: {toy_expected_cost}")
+"""
+        ),
         code(
             r"""
 sensor_path = DATA_DIR / "sensor_readings_timeseries.csv"
@@ -1084,14 +1114,27 @@ recipe_plan = pd.concat(
 
 display(recipe_plan)
 recipe_summary = recipe_plan.groupby(["product", "target_month"], as_index=False)["cost"].sum()
-recipe_summary
+
+recipe_shares = recipe_plan.merge(
+    orders[["product", "target_month", "demand_kg"]],
+    on=["product", "target_month"],
+    how="left",
+)
+recipe_shares["share"] = recipe_shares["kg"] / recipe_shares["demand_kg"]
+
+display(recipe_summary)
+recipe_shares.pivot_table(
+    index=["product", "ingredient"],
+    columns="target_month",
+    values="share",
+)
 """
         ),
         md(
             r"""
 ### Task 5 - blending interpretation
 
-TODO: Compare June and September recipes. Which ingredient quantities change, and are those changes explained by forecasted prices or by nutrition constraints?
+TODO: Compare June and September recipes using both kilograms and shares. Which ingredient shares change, and are those changes explained by forecasted prices or by nutrition constraints?
 """
         ),
         md(
@@ -1192,6 +1235,7 @@ This section reuses Lab 4. The main modeling idea is still:
 4. the objective minimizes the final completion time, called the makespan.
 
 Maintenance is represented as an extra job that occupies one station for its service duration.
+In this version, selected maintenance must finish before production can start on that same station.
 """
         ),
         code(
@@ -1262,7 +1306,16 @@ def solve_job_shop(operations):
         for prev, nxt in zip(job_ops, job_ops[1:]):
             model += start[nxt.op_id] >= start[prev.op_id] + float(prev.duration)
 
-    # Constraint group 2: no overlap on the same station.
+    # Constraint group 2: selected maintenance must happen before production
+    # on the same station. This makes the maintenance decision visible in the schedule.
+    maintenance_rows = operations[operations["product"] == "Maintenance"]
+    production_rows = operations[operations["product"] != "Maintenance"]
+    for maint in maintenance_rows.itertuples(index=False):
+        same_station = production_rows[production_rows["station"] == maint.station]
+        for prod in same_station.itertuples(index=False):
+            model += start[prod.op_id] >= start[maint.op_id] + float(maint.duration)
+
+    # Constraint group 3: no overlap on the same station.
     # The binary y chooses which operation goes first.
     for station, group in operations.groupby("station"):
         rows = list(group.itertuples(index=False))
@@ -1271,7 +1324,7 @@ def solve_job_shop(operations):
             model += start[a.op_id] + float(a.duration) <= start[b.op_id] + horizon * (1 - y)
             model += start[b.op_id] + float(b.duration) <= start[a.op_id] + horizon * y
 
-    # Constraint group 3: makespan is at least every operation's finish time.
+    # Constraint group 4: makespan is at least every operation's finish time.
     for row in operations.itertuples(index=False):
         model += c_max >= start[row.op_id] + float(row.duration)
 
@@ -1373,7 +1426,7 @@ schedule_comparison
             r"""
 ### Task 7 - scheduling interpretation
 
-TODO: Preventive maintenance usually increases planned makespan. Does the risk reduction justify the extra planned time in your result?
+TODO: Selected preventive maintenance is scheduled before production on its station. How much does it increase planned makespan? Does the risk reduction justify the extra planned time in your result?
 """
         ),
         md(
@@ -1478,7 +1531,7 @@ def normal_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
-deadline_min = 760
+deadline_min = 545
 critical_variance = cpm_table.loc[cpm_table["critical"], "variance"].sum()
 z_score = (deadline_min - project_duration) / math.sqrt(critical_variance)
 deadline_probability = normal_cdf(z_score)
@@ -1516,6 +1569,7 @@ The point is to see whether the recommendation is stable or whether one assumpti
 def run_scenario(
     scenario_name,
     price_multiplier=1.0,
+    ingredient_multipliers=None,
     failure_multiplier=1.0,
     technician_time_limit=TECHNICIAN_TIME_LIMIT_MIN,
     allow_maintenance=True,
@@ -1523,6 +1577,10 @@ def run_scenario(
     # 1. Adjust the forecast table for the scenario.
     scenario_prices = forecast_prices.copy()
     scenario_prices["forecast_cost"] = scenario_prices["forecast_cost"] * price_multiplier
+    if ingredient_multipliers is not None:
+        for ingredient, multiplier in ingredient_multipliers.items():
+            mask = scenario_prices["ingredient"] == ingredient
+            scenario_prices.loc[mask, "forecast_cost"] *= multiplier
 
     # 2. Re-solve all recipe LPs with the adjusted prices.
     scenario_recipes = pd.concat(
@@ -1532,6 +1590,24 @@ def run_scenario(
         ],
         ignore_index=True,
     )
+    scenario_recipe_shares = scenario_recipes.merge(
+        orders[["product", "target_month", "demand_kg"]],
+        on=["product", "target_month"],
+        how="left",
+    )
+    scenario_recipe_shares["share"] = (
+        scenario_recipe_shares["kg"] / scenario_recipe_shares["demand_kg"]
+    )
+    share_comparison = scenario_recipe_shares.merge(
+        recipe_shares[["product", "target_month", "ingredient", "share"]].rename(
+            columns={"share": "base_share"}
+        ),
+        on=["product", "target_month", "ingredient"],
+        how="left",
+    )
+    max_recipe_share_change = (
+        share_comparison["share"] - share_comparison["base_share"]
+    ).abs().max()
 
     # 3. Adjust machine risk and re-solve maintenance.
     scenario_risk = machine_risk.copy()
@@ -1561,6 +1637,12 @@ def run_scenario(
     maintenance_cost = scenario_maintenance.loc[
         scenario_maintenance["maintain"] == 1, "service_cost"
     ].sum()
+    maintained_machines = ",".join(
+        str(int(machine_id))
+        for machine_id in scenario_maintenance.loc[
+            scenario_maintenance["maintain"] == 1, "machine_id"
+        ]
+    )
     expected_failure_loss = (
         scenario_maintenance["p_failure"]
         * scenario_maintenance["failure_cost"]
@@ -1580,13 +1662,18 @@ def run_scenario(
         "expected_failure_loss": expected_failure_loss,
         "makespan": scenario_makespan,
         "late_jobs": int(late_jobs),
+        "maintained_machines": maintained_machines if maintained_machines else "none",
+        "max_recipe_share_change": float(max_recipe_share_change),
         "total_expected_cost": ingredient_cost + maintenance_cost + expected_failure_loss,
     }
 
 
 scenario_inputs = [
     {"scenario_name": "base"},
-    {"scenario_name": "high ingredient prices", "price_multiplier": 1.15},
+    {
+        "scenario_name": "chicken supply shock",
+        "ingredient_multipliers": {"chicken": 2.00},
+    },
     {"scenario_name": "high failure risk", "failure_multiplier": 1.40},
     {"scenario_name": "tight maintenance capacity", "technician_time_limit": 60},
     {"scenario_name": "no preventive maintenance", "allow_maintenance": False},
@@ -1600,7 +1687,7 @@ scenario_results
             r"""
 ### Task 9 - scenario interpretation
 
-TODO: Which scenario changes the decision the most? Is your base plan robust, or does one stress case force a different recommendation?
+TODO: Which scenario changes the decision the most? Look for changes in recipe shares, selected maintenance, makespan, late jobs, and total expected cost. Is your base plan robust, or does one stress case force a different recommendation?
 """
         ),
         md(
@@ -1615,7 +1702,7 @@ Write a short operations memo. Your memo must answer:
 4. What is the planned robot-cell makespan?
 5. What is the critical path of the overall project?
 6. What is the largest operational risk?
-7. What changes under the high-price or high-failure scenario?
+7. What changes under the chicken-supply-shock or high-failure scenario?
 8. What decision would you recommend to management?
 """
         ),
