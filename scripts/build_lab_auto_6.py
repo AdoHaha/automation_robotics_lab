@@ -328,6 +328,14 @@ After this lab you should be able to:
 ## 0. Imports and configuration
 
 The lab is designed for Google Colab and local Jupyter. If a package is missing, run the install line once and restart the kernel if needed.
+
+New tools used in this lab:
+
+- `pathlib.Path`: handles file paths in a way that works on Windows, Linux, Colab, and Jupyter.
+- `scikit-learn`: trains and evaluates the failure-risk machine-learning models.
+- `statsmodels`: gives us a simple exponential-smoothing forecasting model.
+- `pulp`: builds and solves the linear and binary optimization models.
+- `networkx`: represents the CPM/PERT project network as a graph.
 """
         ),
         code(
@@ -339,6 +347,8 @@ from __future__ import annotations
 
 import math
 import re
+import urllib.error
+import urllib.request
 import warnings
 from itertools import combinations
 from pathlib import Path
@@ -372,6 +382,56 @@ DATA_DIR = Path("data")
 TARGET_MONTHS = [pd.Timestamp("2026-06-01"), pd.Timestamp("2026-09-01")]
 TECHNICIAN_TIME_LIMIT_MIN = 120
 MAINTENANCE_BUDGET = 1200
+
+# If the notebook is opened directly in Colab, the repository files are not
+# automatically copied into /content. This helper downloads the required data
+# files when they are missing. If you clone the repository first, it does nothing.
+GITHUB_RAW_BASES = [
+    "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/ex6",
+    "https://raw.githubusercontent.com/AdoHaha/automation_robotics_lab/master",
+]
+
+REQUIRED_DATA_FILES = [
+    "lab6_orders.csv",
+    "lab6_ingredients.csv",
+    "lab6_stations.csv",
+    "lab6_routes.csv",
+    "lab6_maintenance_options.csv",
+    "lab6_price_fallback.csv",
+    "sensor_readings_timeseries.csv",
+]
+
+
+def download_if_missing(filename, data_dir=DATA_DIR, raw_bases=GITHUB_RAW_BASES):
+    '''Download one data file from GitHub only if it is not already local.'''
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target = data_dir / filename
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    last_error = None
+    for raw_base in raw_bases:
+        url = f"{raw_base}/data/{filename}"
+        try:
+            print(f"Downloading {filename} from {url}")
+            urllib.request.urlretrieve(url, target)
+            if target.exists() and target.stat().st_size > 0:
+                return target
+        except (urllib.error.URLError, OSError) as exc:
+            last_error = exc
+
+    raise FileNotFoundError(
+        f"Could not find or download {filename}. "
+        "Clone the repository or upload the data/ folder before continuing."
+    ) from last_error
+
+
+def ensure_lab6_data():
+    '''Make sure all local data files needed by this notebook are available.'''
+    return [download_if_missing(filename) for filename in REQUIRED_DATA_FILES]
+
+
+ensure_lab6_data()
 """
         ),
         md(
@@ -428,10 +488,13 @@ The live data source is FRED. The suggested series are:
 | chicken | `APU0000FF1101` | USD/lb |
 
 The notebook also includes `data/lab6_price_fallback.csv`, so the exercise still works offline.
+
+New idea: a public time series rarely has exactly the unit we need. FRED may report USD/lb, USD/gallon, or USD/dozen. Before using prices in an optimization model, we convert everything to the same teaching unit: cost per kg.
 """
         ),
         code(
             r"""
+# FRED IDs are stable identifiers for public monthly price series.
 fred_series = {
     "beef": "APU0000703112",
     "eggs": "APU0000708111",
@@ -468,6 +531,7 @@ def load_fred_series(series_id, ingredient, fallback_df, use_live=True):
         df["raw_value"] = pd.to_numeric(df["raw_value"], errors="coerce")
         df = df.dropna(subset=["raw_value"])
 
+        # Convert from the original FRED unit into the common unit used by the LP.
         multiplier = unit_conversions.set_index("ingredient").loc[
             ingredient, "conversion_to_cost_per_kg"
         ]
@@ -524,6 +588,16 @@ This section includes:
 - seasonal naive baseline,
 - drift/trend baseline,
 - exponential smoothing from `statsmodels`.
+
+New tool: `statsmodels.tsa.holtwinters.ExponentialSmoothing`.
+
+The three forecasting methods represent increasing complexity:
+
+- **seasonal naive**: "next June looks like last June",
+- **drift**: "continue the long-run linear trend",
+- **exponential smoothing**: combine level, trend, and yearly seasonality.
+
+The important habit is not the specific model. The important habit is to keep the last 12 months as validation data and check whether a more complex model actually improves error.
 """
         ),
         code(
@@ -535,11 +609,14 @@ def train_test_split_series(y, test_size=12):
 
 
 def seasonal_naive_forecast(train, horizon, season_length=12):
+    # Reuse the last observed value from the same month of the seasonal cycle.
+    # For monthly data and season_length=12, forecasted March uses last March.
     values = [train.iloc[-season_length + (h % season_length)] for h in range(horizon)]
     return pd.Series(values)
 
 
 def drift_forecast(train, horizon):
+    # Fit a simple straight line through history and extend that line forward.
     x = np.arange(len(train))
     coef = np.polyfit(x, train.values, deg=1)
     future_x = np.arange(len(train), len(train) + horizon)
@@ -548,6 +625,7 @@ def drift_forecast(train, horizon):
 
 def exponential_smoothing_forecast(train, horizon):
     try:
+        # Additive trend and additive seasonality are readable defaults for a first lab.
         model = ExponentialSmoothing(
             train,
             trend="add",
@@ -569,6 +647,7 @@ def mape(y_true, y_pred):
 
 
 def evaluate_forecasters(price_df, ingredient):
+    # One ingredient at a time: clean the monthly index, split history, forecast test months.
     series = (
         price_df[price_df["ingredient"] == ingredient]
         .sort_values("date")
@@ -577,6 +656,7 @@ def evaluate_forecasters(price_df, ingredient):
         .interpolate()
     )
     train, test = train_test_split_series(series, test_size=12)
+    # Each prediction has the same length as the held-out validation period.
     predictions = {
         "seasonal_naive": seasonal_naive_forecast(train, len(test)),
         "drift": drift_forecast(train, len(test)),
@@ -612,11 +692,13 @@ def forecast_targets(price_df, target_months):
             .asfreq("MS")
             .interpolate()
         )
+        # Select the model with the lowest validation MAE for this ingredient.
         scores = evaluate_forecasters(price_df, ingredient)
         selected = scores.sort_values("MAE").iloc[0]
         last_date = series.index.max()
         horizon = max((month.to_period("M") - last_date.to_period("M")).n for month in target_months)
 
+        # Refit the selected model on all available data, then forecast to the target months.
         if selected["model"] == "seasonal_naive":
             pred = seasonal_naive_forecast(series, horizon)
         elif selected["model"] == "drift":
@@ -661,6 +743,23 @@ TODO:
 This is an introduction to supervised machine learning. The target is `near_failure`: whether a reading occurred shortly before a simulated failure.
 
 Important idea: readings from the same machine lifecycle are related. If we split individual rows randomly, the model can see almost the same lifecycle in both train and test data. That is leakage. We split by `instance_id` instead.
+
+New tool: `scikit-learn`.
+
+The ML workflow in this lab has five steps:
+
+1. choose a target column (`near_failure`),
+2. create useful feature columns from raw sensor readings,
+3. split data into train and test sets without leakage,
+4. train one or more classifiers,
+5. evaluate using maintenance-relevant metrics, not only accuracy.
+
+Vocabulary:
+
+- **feature**: an input column used by the model,
+- **target**: the answer the model learns to predict,
+- **classifier**: a model that predicts classes such as failure/no failure,
+- **probability threshold**: the cutoff where we convert a probability into an action.
 """
         ),
         code(
@@ -687,9 +786,12 @@ sensor_sample.head()
         code(
             r"""
 def make_failure_features(df):
+    # Always sort time series before calculating rolling means or changes.
     df = df.sort_values(["instance_id", "time"]).copy()
     grouped = df.groupby("instance_id", group_keys=False)
 
+    # Rolling features summarize recent behavior, which is often more useful
+    # than one instantaneous sensor reading.
     df["temp_roll_mean_3"] = (
         grouped["sensor_temp"].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
     )
@@ -699,6 +801,7 @@ def make_failure_features(df):
     df["vib_roll_max_3"] = (
         grouped["sensor_vib"].rolling(3, min_periods=1).max().reset_index(level=0, drop=True)
     )
+    # Change features approximate a simple trend: is the signal rising or falling?
     df["temp_change"] = grouped["sensor_temp"].diff().fillna(0)
     df["vib_change"] = grouped["sensor_vib"].diff().fillna(0)
 
@@ -718,6 +821,7 @@ def make_failure_features(df):
 
 features_df, feature_cols = make_failure_features(sensor_sample)
 
+# Split whole lifecycles, not individual rows. This prevents leakage.
 instances = features_df["instance_id"].drop_duplicates().sample(frac=1, random_state=RANDOM_SEED)
 split = int(0.75 * len(instances))
 train_instances = set(instances.iloc[:split])
@@ -745,6 +849,7 @@ def positive_class_probability(model, X):
 
 
 def evaluate_classifier(y_true, p_hat, threshold=0.5):
+    # Probabilities become yes/no predictions only after we choose a threshold.
     y_pred = (p_hat >= threshold).astype(int)
     return {
         "threshold": threshold,
@@ -757,10 +862,12 @@ def evaluate_classifier(y_true, p_hat, threshold=0.5):
 
 
 models = {
+    # Logistic regression is a simple, interpretable baseline. Scaling helps it fit.
     "logistic_regression": make_pipeline(
         StandardScaler(),
         LogisticRegression(max_iter=2000, class_weight="balanced"),
     ),
+    # Random forests can capture nonlinear patterns in sensor readings.
     "random_forest": RandomForestClassifier(
         n_estimators=80,
         min_samples_leaf=5,
@@ -774,6 +881,7 @@ model_rows = []
 fitted_models = {}
 probabilities = {}
 for name, model in models.items():
+    # fit = learn from training data; predict_proba = estimate failure probabilities
     model.fit(X_train, y_train)
     p_hat = positive_class_probability(model, X_test)
     fitted_models[name] = model
@@ -810,6 +918,7 @@ def expected_classification_cost(
     false_negative_cost=5000,
     false_positive_cost=600,
 ):
+    # False negatives are missed failures. False positives are unnecessary service calls.
     y_pred = (p_hat >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
     return fp * false_positive_cost + fn * false_negative_cost
@@ -823,6 +932,7 @@ def choose_threshold_by_cost(
 ):
     rows = []
     for threshold in np.linspace(0.05, 0.95, 19):
+        # Try several thresholds and keep the one with the lowest expected cost.
         rows.append({
             "threshold": threshold,
             "expected_cost": expected_classification_cost(
@@ -851,6 +961,7 @@ latest_rows = (
     .tail(1)
     .copy()
 )
+# Use the latest reading from each lifecycle as a proxy for current machine condition.
 latest_rows["p_failure"] = best_model.predict_proba(latest_rows[feature_cols])[:, 1]
 
 machine_risk = (
@@ -864,6 +975,7 @@ machine_risk = (
     .merge(maintenance_options, on="machine_id", how="left")
 )
 machine_risk["expected_avoided_loss"] = (
+    # Expected avoided loss is the value that maintenance can protect.
     machine_risk["p_failure"]
     * machine_risk["failure_cost"]
     * machine_risk["risk_reduction"]
@@ -887,11 +999,21 @@ TODO:
 ## 5. Blending linear program
 
 Now the forecasts become an optimization input. For each product and target month, choose ingredient kilograms to minimize cost while satisfying nutrition and share constraints.
+
+New tool: `PuLP`.
+
+PuLP models have the same ingredients as the hand-written LPs from earlier labs:
+
+- **decision variables**: unknown values the solver chooses,
+- **objective**: the expression we minimize or maximize,
+- **constraints**: equations or inequalities the answer must obey,
+- **status**: whether the solver found an optimal feasible solution.
 """
         ),
         code(
             r"""
 def solve_blend(product_name, target_month, price_table, orders, ingredients, price_col="forecast_cost"):
+    # One call solves one product in one delivery month.
     order_row = orders[
         (orders["product"] == product_name)
         & (orders["target_month"] == pd.Timestamp(target_month))
@@ -903,6 +1025,7 @@ def solve_blend(product_name, target_month, price_table, orders, ingredients, pr
         .to_dict()
     )
 
+    # x[ingredient] is the number of kilograms of that ingredient in the batch.
     model_name = f"blend_{re.sub(r'[^A-Za-z0-9_]+', '_', product_name)}_{pd.Timestamp(target_month):%Y_%m}"
     model = pulp.LpProblem(model_name, pulp.LpMinimize)
     x = {
@@ -910,13 +1033,17 @@ def solve_blend(product_name, target_month, price_table, orders, ingredients, pr
         for row in ingredients.itertuples(index=False)
     }
 
+    # Objective: minimize total ingredient cost.
     model += pulp.lpSum(prices[i] * x[i] for i in x)
+
+    # Recipe constraints: total mass and nutrition requirements.
     model += pulp.lpSum(x[i] for i in x) == demand
     model += pulp.lpSum(row.protein * x[row.ingredient] for row in ingredients.itertuples(index=False)) >= float(order_row["min_protein"]) * demand
     model += pulp.lpSum(row.fat * x[row.ingredient] for row in ingredients.itertuples(index=False)) >= float(order_row["min_fat"]) * demand
     model += pulp.lpSum(row.moisture * x[row.ingredient] for row in ingredients.itertuples(index=False)) <= float(order_row["max_moisture"]) * demand
 
     for row in ingredients.itertuples(index=False):
+        # Share bounds prevent unrealistic recipes such as 100% filler.
         model += x[row.ingredient] >= float(row.min_share) * demand
         model += x[row.ingredient] <= float(row.max_share) * demand
 
@@ -963,22 +1090,35 @@ TODO: Compare June and September recipes. Which ingredient quantities change, an
 ## 6. Preventive-maintenance binary optimization
 
 The ML model estimates failure probability. The maintenance model turns that estimate into a decision.
+
+This is a small **binary optimization** model. A binary variable can only be 0 or 1:
+
+- `z[m] = 1`: maintain machine `m`,
+- `z[m] = 0`: do not maintain machine `m`.
+
+The objective rewards maintenance only when the expected avoided loss is larger than the service cost, while the constraints enforce limited technician time and budget.
 """
         ),
         code(
             r"""
 def solve_maintenance_plan(machine_risk, time_limit_min, budget):
     model = pulp.LpProblem("maintenance_selection", pulp.LpMaximize)
+
+    # Binary decision: choose whether each machine receives service.
     z = {
         int(row.machine_id): pulp.LpVariable(f"maintain_{int(row.machine_id)}", cat="Binary")
         for row in machine_risk.itertuples(index=False)
     }
+    # Net value is what the objective earns by selecting this maintenance action.
     net_value = {
         int(row.machine_id): float(row.expected_avoided_loss - row.service_cost)
         for row in machine_risk.itertuples(index=False)
     }
 
+    # Objective: maximize total maintenance value.
     model += pulp.lpSum(net_value[m] * z[m] for m in z)
+
+    # Resource constraints: technicians cannot exceed time or budget.
     model += pulp.lpSum(
         float(row.service_time_min) * z[int(row.machine_id)]
         for row in machine_risk.itertuples(index=False)
@@ -1034,6 +1174,15 @@ TODO: Compare the optimized maintenance plan with the simple rule. Does the simp
 ## 7. Robot-cell job-shop scheduling
 
 Each production batch is a job moving through shared stations. Selected maintenance tasks become blocking operations on those same stations.
+
+This section reuses Lab 4. The main modeling idea is still:
+
+1. each operation has a start time,
+2. operations inside the same job must follow route order,
+3. two operations cannot use the same station at the same time,
+4. the objective minimizes the final completion time, called the makespan.
+
+Maintenance is represented as an extra job that occupies one station for its service duration.
 """
         ),
         code(
@@ -1042,6 +1191,8 @@ def build_job_operations(orders, routes, reference_batch_kg=500):
     rows = []
     for batch in orders.itertuples(index=False):
         route = routes[routes["product"] == batch.product].sort_values("operation")
+        # Larger demand creates a longer batch. Clamp the scale so the toy instance
+        # remains small enough for a classroom MILP.
         scale = max(0.7, min(1.5, float(batch.demand_kg) / reference_batch_kg))
         job_name = f"{batch.target_month:%b} {batch.product}"
         for op in route.itertuples(index=False):
@@ -1059,6 +1210,7 @@ def build_job_operations(orders, routes, reference_batch_kg=500):
 def add_maintenance_jobs(operations, maintenance_plan):
     rows = operations.to_dict("records")
     for row in maintenance_plan[maintenance_plan["maintain"] == 1].itertuples(index=False):
+        # A selected service action blocks the same station as production would.
         rows.append({
             "job": f"Maintenance: {row.station}",
             "product": "Maintenance",
@@ -1084,6 +1236,7 @@ def safe_name(text):
 def solve_job_shop(operations):
     operations = operations.copy().reset_index(drop=True)
     operations["op_id"] = operations.index
+    # A safe upper bound for "very late" in the no-overlap constraints.
     horizon = int(operations["duration"].sum() + 100)
 
     model = pulp.LpProblem("robot_cell_job_shop", pulp.LpMinimize)
@@ -1093,13 +1246,15 @@ def solve_job_shop(operations):
     }
     c_max = pulp.LpVariable("makespan", lowBound=0)
 
-    # Route order inside each job.
+    # Constraint group 1: route order inside each job.
     for job, group in operations.groupby("job"):
         group = group.sort_values("operation")
-        for prev, nxt in zip(group.itertuples(index=False), list(group.itertuples(index=False))[1:]):
+        job_ops = list(group.itertuples(index=False))
+        for prev, nxt in zip(job_ops, job_ops[1:]):
             model += start[nxt.op_id] >= start[prev.op_id] + float(prev.duration)
 
-    # No overlap on the same station.
+    # Constraint group 2: no overlap on the same station.
+    # The binary y chooses which operation goes first.
     for station, group in operations.groupby("station"):
         rows = list(group.itertuples(index=False))
         for a, b in combinations(rows, 2):
@@ -1107,6 +1262,7 @@ def solve_job_shop(operations):
             model += start[a.op_id] + float(a.duration) <= start[b.op_id] + horizon * (1 - y)
             model += start[b.op_id] + float(b.duration) <= start[a.op_id] + horizon * y
 
+    # Constraint group 3: makespan is at least every operation's finish time.
     for row in operations.itertuples(index=False):
         model += c_max >= start[row.op_id] + float(row.duration)
 
@@ -1122,6 +1278,7 @@ def solve_job_shop(operations):
 
 
 def validate_schedule(schedule, tolerance=1e-7):
+    # Solver output should always be checked before interpreting a Gantt chart.
     errors = []
     for job, group in schedule.groupby("job"):
         group = group.sort_values("operation")
@@ -1215,6 +1372,18 @@ TODO: Preventive maintenance usually increases planned makespan. Does the risk r
 ## 8. CPM/PERT project planning
 
 The production schedule is only one part of the project. Now use the job-shop makespan as the duration of the `Produce batches` task in a CPM/PERT network.
+
+New tool: `networkx`.
+
+CPM treats the project as a directed graph:
+
+- nodes are tasks,
+- arrows point from predecessor to successor,
+- earliest times come from a forward pass,
+- latest times come from a backward pass,
+- tasks with zero slack form the critical path.
+
+PERT adds uncertainty by storing optimistic (`a`), most likely (`m`), and pessimistic (`b`) durations.
 """
         ),
         code(
@@ -1232,6 +1401,7 @@ project_tasks = pd.DataFrame([
     {"id": "J", "task": "Ship order", "a": 20, "m": 30, "b": 50, "predecessors": "I"},
 ])
 
+# PERT expected duration and variance.
 project_tasks["duration"] = (project_tasks["a"] + 4 * project_tasks["m"] + project_tasks["b"]) / 6
 project_tasks["variance"] = ((project_tasks["b"] - project_tasks["a"]) / 6) ** 2
 project_tasks
@@ -1248,6 +1418,8 @@ def parse_predecessors(text):
 def compute_cpm(tasks, duration_col="duration"):
     tasks = tasks.copy()
     tasks["pred_list"] = tasks["predecessors"].apply(parse_predecessors)
+
+    # Build the project graph from predecessor links.
     graph = nx.DiGraph()
     for row in tasks.itertuples(index=False):
         graph.add_node(row.id)
@@ -1259,6 +1431,8 @@ def compute_cpm(tasks, duration_col="duration"):
     duration = tasks.set_index("id")[duration_col].to_dict()
     topo = list(nx.topological_sort(graph))
     es, ef = {}, {}
+
+    # Forward pass: earliest start/finish.
     for node in topo:
         preds = list(graph.predecessors(node))
         es[node] = max([ef[p] for p in preds], default=0)
@@ -1266,6 +1440,8 @@ def compute_cpm(tasks, duration_col="duration"):
 
     project_finish = max(ef.values())
     lf, ls = {}, {}
+
+    # Backward pass: latest finish/start without delaying the project.
     for node in reversed(topo):
         succs = list(graph.successors(node))
         lf[node] = min([ls[s] for s in succs], default=project_finish)
@@ -1318,6 +1494,12 @@ TODO:
 ## 9. Scenario analysis
 
 A useful operations plan should be tested under stress. The function below reruns the integrated pipeline under changed prices, failure risk, and maintenance capacity.
+
+Scenario analysis answers "what if?" questions. Here each scenario reruns the same pipeline:
+
+forecast prices -> blending LP -> maintenance optimization -> job-shop schedule -> cost summary
+
+The point is to see whether the recommendation is stable or whether one assumption changes the decision.
 """
         ),
         code(
@@ -1329,9 +1511,11 @@ def run_scenario(
     technician_time_limit=TECHNICIAN_TIME_LIMIT_MIN,
     allow_maintenance=True,
 ):
+    # 1. Adjust the forecast table for the scenario.
     scenario_prices = forecast_prices.copy()
     scenario_prices["forecast_cost"] = scenario_prices["forecast_cost"] * price_multiplier
 
+    # 2. Re-solve all recipe LPs with the adjusted prices.
     scenario_recipes = pd.concat(
         [
             solve_blend(row.product, row.target_month, scenario_prices, orders, ingredients)
@@ -1340,6 +1524,7 @@ def run_scenario(
         ignore_index=True,
     )
 
+    # 3. Adjust machine risk and re-solve maintenance.
     scenario_risk = machine_risk.copy()
     scenario_risk["p_failure"] = np.minimum(1.0, scenario_risk["p_failure"] * failure_multiplier)
     scenario_risk["expected_avoided_loss"] = (
@@ -1358,9 +1543,11 @@ def run_scenario(
         scenario_maintenance["maintain"] = 0
         scenario_maintenance["net_value"] = scenario_maintenance["expected_avoided_loss"] - scenario_maintenance["service_cost"]
 
+    # 4. Rebuild and solve the robot-cell schedule.
     scenario_operations = add_maintenance_jobs(operations_without_maintenance, scenario_maintenance)
     scenario_makespan, scenario_schedule = solve_job_shop(scenario_operations)
 
+    # 5. Summarize the business outcomes.
     ingredient_cost = scenario_recipes["cost"].sum()
     maintenance_cost = scenario_maintenance.loc[
         scenario_maintenance["maintain"] == 1, "service_cost"

@@ -27,6 +27,8 @@ REQUIRED_TITLES = [
 ]
 
 REQUIRED_FUNCTIONS = [
+    "def download_if_missing",
+    "def ensure_lab6_data",
     "def load_fred_series",
     "def evaluate_forecasters",
     "def forecast_targets",
