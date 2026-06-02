@@ -1,0 +1,5 @@
+product,target_month,demand_kg,due_min,min_protein,min_fat,max_moisture
+Protein Plus,2026-06-01,420,430,0.32,0.1,0.68
+Budget Blend,2026-06-01,620,430,0.24,0.08,0.72
+Protein Plus,2026-09-01,520,500,0.32,0.1,0.68
+Budget Blend,2026-09-01,700,500,0.24,0.08,0.72

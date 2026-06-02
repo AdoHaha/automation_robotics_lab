@@ -3,3 +3,6 @@ numpy
 pandas
 matplotlib
 networkx
+scikit-learn
+statsmodels
+nbformat
