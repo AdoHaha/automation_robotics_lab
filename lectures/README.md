@@ -23,15 +23,20 @@ python -m jupyterlab lectures/notebooks/
 Open a notebook and choose **Restart Kernel and Run All Cells**. Each companion
 has embedded or seeded synthetic data, worked outputs, numerical checks,
 prediction questions and interactive controls. No dataset downloads, credentials
-or separately installed solver are required. If widgets do not display, change
+or remote solver services are required. If widgets do not display, change
 the arguments of the direct function calls beside them and rerun the cells.
 
 For Colab, use a link above, save your own copy and run the cells in order.
 If packages are missing, install them in a setup cell:
 
 ```python
-%pip install numpy scipy matplotlib pandas ipywidgets
+%pip install "pulp>=3.3,<4" numpy scipy matplotlib pandas ipywidgets
 ```
+
+Linear and mixed-integer examples use **PuLP 3.x with CBC**, matching the labs.
+PuLP 3.x includes CBC on supported platforms. Models expose named variables,
+constraint slacks and (for continuous LPs) shadow prices. SciPy remains for the
+optional nonlinear example, probability distributions and calibration.
 
 ## Teaching connections
 
